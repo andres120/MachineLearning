@@ -1,0 +1,148 @@
+---
+title: "Practical Machine Learning Project"
+author: "Andres Chacon"
+date: "December 17, 2016"
+output: 
+  html_document: 
+    keep_md: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, cache=TRUE)
+set.seed(54321)
+library(caret)
+library(parallel)
+library(doParallel)
+library(lubridate)
+library(gbm)
+```
+
+## Introduction:
+
+This is the final project from Practical Machine Learning, the 8th course of the specialization in Data Science. The project's goal is to apply the acquired knowledge to predict for an specific sample under which of the 6 categories that classify the way an exercise was performed it falls, the data was collected using accelerometers placed in different parts of the body. More details can be found [here](http://groupware.les.inf.puc-rio.br/har)
+
+## Cleaning the Data:
+
+In this section we will read the CSV files, remove some useless data and prepare the sets for the training and crossvalidation.
+
+```{r data}
+# Read the CSV files
+raw.data <- read.csv("pml-training.csv")
+raw.test <- read.csv("pml-testing.csv")
+
+# Preview of the first rows:
+str(raw.data)
+```
+It shows that some of the columns seem to be partially empty.
+
+```{r analysis}
+# This function will calculate the NA or "" ratio of a column. 
+na.ratio <- function(row) {
+  return(length(row[is.na(row)|row==""]) / length(row))
+}
+
+# This function will go through every column and calculate how empty it is.
+ratios <- numeric()
+for(row in 1:160){
+  ratios[row] <- na.ratio(raw.data[,row])
+}
+
+# Check if there are columns with fewer data than others:
+unique(ratios)
+```
+This shows that the columns are either full or around 98% empty.
+
+To keep the model simple and since data such as timestamps should not matter when identifying a physical activity we proceed to remove this kind of variables that do not provide meaningful information for the prediction.
+
+```{r cleaning}
+ratios[c(1,2,3,4,5,6,7)] = 1
+pre.data <- raw.data[,ratios==0]
+pre.test <- raw.test[,ratios==0]
+
+# Then we generate the training and test sets from the pre.data:
+
+toTrain = createDataPartition(pre.data$classe, p = 3/4, list=F)
+trainSet = pre.data[toTrain,]
+testSet = pre.data[-toTrain,]
+
+```
+
+
+## Modeling:
+
+Based on previous experiences from this course will try good performing methods, will begin with boosting and random forest:
+
+Boosting:
+
+```{r boosting}
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+start <- now()
+gbm <- train(classe ~.,method = "gbm", data = trainSet, trControl = fitControl)
+stop <- now()
+stopCluster(cluster)
+registerDoSEQ()
+elapsed <- as.period(interval(start,stop))
+paste("Processing took",round(elapsed))
+```
+
+```{r gbm_crossvalidation}
+# Accuracy against the test set:
+predictions <- predict(gbm, testSet)
+confusionMatrix(testSet$classe,predictions)
+# Accuracy against the training test:
+predictions.training <- predict(gbm, trainSet)
+confusionMatrix(trainSet$classe,predictions.training)
+```
+
+We got a 96.1% accuracy, which even though it is high enough for this project, might not be the best choice.
+
+Random Forest:
+
+```{r random_forest}
+cluster <- makeCluster(detectCores() - 1)
+registerDoParallel(cluster)
+fitControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+start <- now()
+randomForest <- train(classe ~.,method = "rf", data = trainSet, trControl = fitControl)
+stop <- now()
+stopCluster(cluster)
+registerDoSEQ()
+elapsed <- as.period(interval(start,stop))
+paste("Processing took",round(elapsed))
+```
+
+```{r rf_crossvalidation}
+# Accuracy against the test set:
+predictions <- predict(randomForest, testSet)
+confusionMatrix(testSet$classe,predictions)
+# Accuracy against the training test:
+predictions.training <- predict(randomForest, trainSet)
+confusionMatrix(trainSet$classe,predictions.training)
+```
+
+As expected the random forest has better accuracy than boosting, since it has a 99.3% it is considered good enough for this project purposes.  
+
+## Prediction:
+
+```{r predition}
+predict(randomForest, pre.test)
+predict(gbm, pre.test)
+```
+
+Predictions using both methods gave the same results:
+
+```{r answers}
+as.data.frame(matrix(predict(randomForest, pre.test),nrow = 1, dimnames = list(NULL, as.character(1:20))))
+```
+
+
+## Conclusion:
+
+This is a clear example of why we often hear that the model is not necessarily the main factor in machine learning but the data itself, due to the abundant data we had to training the model we managed to achieve very high accuracy without having to tweak the models a lot.
+
